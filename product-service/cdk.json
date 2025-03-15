@@ -1,5 +1,5 @@
 {
-  "app": "npx ts-node --prefer-ts-exts bin/backend_aws_2025.ts",
+  "app": "npx ts-node -r dotenv/config --prefer-ts-exts bin/backend_aws_2025.ts",
   "watch": {
     "include": [
       "**"
