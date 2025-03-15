@@ -6,12 +6,17 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as path from 'path';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
 
 export class ImportServiceStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
     const bucket = s3.Bucket.fromBucketName(this, 'ImportBucket', 'import-service-bucket-ts');
+
+    const catalogItemsQueue = Queue.fromQueueArn(this, 'ImportCatalogItemsQueue',
+      `arn:aws:sqs:${this.region}:${this.account}:catalogItemsQueue`
+    );
 
     const importProductsFileLambda = new NodejsFunction(this, 'ImportProductsFileFunction', {
       runtime: lambda.Runtime.NODEJS_18_X,
@@ -33,19 +38,23 @@ export class ImportServiceStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_18_X,
       handler: 'importFileParser',
       entry: path.join(__dirname, '../lambda/importFileParser.ts'),
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
       environment: {
+        SQS_URL: catalogItemsQueue.queueUrl,
         BUCKET_NAME: bucket.bucketName,
         REGION: this.region,
       },
       bundling: {
-        externalModules: [],
+        externalModules: ['aws-sdk'],
         minify: true,
         sourceMap: true,
       },
     });
 
     bucket.grantReadWrite(importProductsFileLambda);
-    bucket.grantRead(importFileParserFunction);
+    bucket.grantReadWrite(importFileParserFunction);
+    catalogItemsQueue.grantSendMessages(importFileParserFunction);
 
     const api = new apigateway.RestApi(this, 'ImportApi', {
       restApiName: 'Import Service',
