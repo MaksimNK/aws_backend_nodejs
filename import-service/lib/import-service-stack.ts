@@ -6,13 +6,29 @@ import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as path from 'path';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 
 export class ImportServiceStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    const basicAuthorizer = 'arn:aws:lambda:us-east-1:207567779149:function:AuthorizationServiceStack-BasicAuthorizer2B49C1FC-RX4ndUSg7wzU'
+
     const bucket = s3.Bucket.fromBucketName(this, 'ImportBucket', 'import-service-bucket-ts');
+
+    const authorizerFn = lambda.Function.fromFunctionArn(
+      this,
+      'BasicAuthorizer',
+      basicAuthorizer
+    );
+
+    authorizerFn.addPermission('ApiGatewayInvoke', {
+      principal: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: `arn:aws:execute-api:${this.region}:${this.account}:*/*/*/*`
+    });
+
 
     const catalogItemsQueue = Queue.fromQueueArn(this, 'ImportCatalogItemsQueue',
       `arn:aws:sqs:${this.region}:${this.account}:catalogItemsQueue`
@@ -61,15 +77,34 @@ export class ImportServiceStack extends cdk.Stack {
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
+        allowHeaders: [
+          'Content-Type',
+          'X-Amz-Date',
+          'Authorization',
+          'X-Api-Key',
+          'X-Amz-Security-Token',
+        ],
       },
     });
 
-    const importResource = api.root.addResource('import');
-    importResource.addMethod('GET', new apigateway.LambdaIntegration(importProductsFileLambda), {
-      requestParameters: {
-        'method.request.querystring.name': true,
-      },
+    const authorizer = new apigateway.TokenAuthorizer(this, 'ImportApiAuthorizer', {
+      handler: authorizerFn,
+      identitySource: apigateway.IdentitySource.header('Authorization'),
+      resultsCacheTtl: cdk.Duration.seconds(0)
     });
+
+    const importResource = api.root.addResource('import');
+
+    importResource.addMethod('GET',
+      new apigateway.LambdaIntegration(importProductsFileLambda),
+      {
+        authorizer: authorizer,
+        authorizationType: apigateway.AuthorizationType.CUSTOM,
+        requestParameters: {
+          'method.request.querystring.name': true,
+        },
+      }
+    );
 
     bucket.addEventNotification(
       s3.EventType.OBJECT_CREATED,
